@@ -6,7 +6,7 @@ setup(
     name='aiolifx_effects',
     packages=['aiolifx_effects'],
     version='0.1.0',
-    install_requires=['aiolifx'],
+    install_requires=['aiolifx>=0.5.0'],
     description='aiolifx light effects',
     author='Anders Melchiorsen',
     author_email='amelchio@nogoto.net',
