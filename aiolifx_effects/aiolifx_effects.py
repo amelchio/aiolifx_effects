@@ -12,12 +12,16 @@ NEUTRAL_WHITE = 3500
 def lifx_white(device):
     return device.product and device.product in [10, 11, 18]
 
-class PowerColor:
+class PreState:
     """Structure describing a power/color state."""
 
-    def __init__(self, power, color):
-        self.power = power
-        self.color = list(color)
+    def __init__(self, device):
+        self.power = (device.power_level != 0)
+        self.color = list(device.color)
+        if device.color_zones:
+            self.color_zones = device.color_zones.copy()
+        else:
+            self.color_zones = None
 
 
 class RunningEffect:
@@ -47,7 +51,7 @@ class AwaitAioLIFX:
     def wait(self, method):
         """Call an aiolifx method and wait for its response or a timeout."""
         self.event.clear()
-        method(self.callback)
+        method(callb=self.callback)
         yield from self.event.wait()
         return self.message
 
@@ -79,10 +83,13 @@ class Conductor:
         tasks = []
         for device in participants:
             tasks.append(AwaitAioLIFX().wait(device.get_color))
+            if device.color_zones:
+                for zone in range(0, len(device.color_zones), 8):
+                    tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
         yield from asyncio.wait(tasks, loop=self.loop)
 
         for device in participants:
-            pre_state = PowerColor((device.power_level != 0), device.color)
+            pre_state = PreState(device)
             self.running[device.mac_addr] = RunningEffect(effect, pre_state)
 
         self.loop.create_task(effect.async_perform(participants))
@@ -117,7 +124,18 @@ class Conductor:
             device.set_power(False)
             yield from asyncio.sleep(0.3)
 
-        device.set_color(running.pre_state.color)
+        ack = AwaitAioLIFX().wait
+
+        zones = running.pre_state.color_zones
+        if zones:
+            for index, zone_hsbk in enumerate(zones):
+                apply = 1 if (index == len(zones)-1) else 0
+                yield from ack(partial(device.set_color_zones,
+                    index, index, zone_hsbk, apply=apply))
+        else:
+            yield from ack(partial(device.set_color,
+                running.pre_state.color))
+
         yield from asyncio.sleep(0.3)
 
 
