@@ -92,6 +92,9 @@ class Conductor:
             pre_state = PreState(device)
             self.running[device.mac_addr] = RunningEffect(effect, pre_state)
 
+        # Powered off zones report zero brightness. Get the real values.
+        yield from self._fixup_multizone(participants)
+
         self.loop.create_task(effect.async_perform(participants))
         self.lock.release()
 
@@ -137,6 +140,43 @@ class Conductor:
                 running.pre_state.color))
 
         yield from asyncio.sleep(0.3)
+
+    @asyncio.coroutine
+    def _fixup_multizone(self, participants):
+        """Temporarily turn on multizone lights to get the correct zone states."""
+        fixup = []
+        for device in participants:
+            if device.color_zones and device.power_level == 0:
+                fixup.append(device)
+
+        if not fixup:
+            return
+
+        @asyncio.coroutine
+        def powertoggle(state):
+            tasks = []
+            for device in fixup:
+                tasks.append(AwaitAioLIFX().wait(partial(device.set_power, state)))
+            yield from asyncio.wait(tasks, loop=self.loop)
+            yield from asyncio.sleep(0.3)
+
+        # Power on
+        yield from powertoggle(True)
+
+        # Get full hsbk
+        tasks = []
+        for device in fixup:
+            for zone in range(0, len(device.color_zones), 8):
+                tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
+        yield from asyncio.wait(tasks, loop=self.loop)
+
+        # Update pre_state colors
+        for device in fixup:
+            for zone in range(0, len(device.color_zones)):
+                self.running[device.mac_addr].pre_state.color_zones[zone] = device.color_zones[zone]
+
+        # Power off again
+        yield from powertoggle(False)
 
 
 class LIFXEffect:
