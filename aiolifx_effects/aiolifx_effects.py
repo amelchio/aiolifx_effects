@@ -255,11 +255,11 @@ class EffectPulse(LIFXEffect):
         # Ping and solid have special duty cycles
         if self.mode == 'ping':
             ping_duration = int(5000 - min(2500, 300*self.period))
-            self.duty_cycle = 2**15 - ping_duration
+            self.skew_ratio = 2**15 - ping_duration
         elif self.mode == 'solid':
-            self.duty_cycle = -2**15
+            self.skew_ratio = -2**15
         else:
-            self.duty_cycle = 0
+            self.skew_ratio = 0
 
     @asyncio.coroutine
     def async_play(self):
@@ -288,7 +288,8 @@ class EffectPulse(LIFXEffect):
             'color': color,
             'period': int(self.period*1000),
             'cycles': self.cycles,
-            'duty_cycle': self.duty_cycle,
+            'skew_ratio': self.skew_ratio,
+            'duty_cycle': self.skew_ratio,
             'waveform': self.waveform,
         }
         device.set_waveform(args)
