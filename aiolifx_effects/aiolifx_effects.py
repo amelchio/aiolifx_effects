@@ -86,7 +86,8 @@ class Conductor:
             if device.color_zones:
                 for zone in range(0, len(device.color_zones), 8):
                     tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
-        yield from asyncio.wait(tasks)
+        if tasks:
+            yield from asyncio.wait(tasks)
 
         for device in participants:
             pre_state = PreState(device)
@@ -109,7 +110,8 @@ class Conductor:
         tasks = []
         for device in devices:
             tasks.append(self.loop.create_task(self._stop_one(device)))
-        yield from asyncio.wait(tasks)
+        if tasks:
+            yield from asyncio.wait(tasks)
 
     @asyncio.coroutine
     def _stop_one(self, device):
@@ -157,7 +159,9 @@ class Conductor:
             tasks = []
             for device in fixup:
                 tasks.append(AwaitAioLIFX().wait(partial(device.set_power, state)))
-            yield from asyncio.wait(tasks)
+            if tasks:
+                yield from asyncio.wait(tasks)
+
             yield from asyncio.sleep(0.3)
 
         # Power on
@@ -168,7 +172,8 @@ class Conductor:
         for device in fixup:
             for zone in range(0, len(device.color_zones), 8):
                 tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
-        yield from asyncio.wait(tasks)
+        if tasks:
+            yield from asyncio.wait(tasks)
 
         # Update pre_state colors
         for device in fixup:
