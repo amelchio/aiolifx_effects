@@ -5,7 +5,7 @@ from setuptools import setup
 setup(
     name='aiolifx_effects',
     packages=['aiolifx_effects'],
-    version='0.1.2',
+    version='0.2.0',
     install_requires=['aiolifx>=0.5.0'],
     description='aiolifx light effects',
     author='Anders Melchiorsen',
