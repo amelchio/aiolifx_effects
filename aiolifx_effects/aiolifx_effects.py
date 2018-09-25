@@ -47,12 +47,11 @@ class AwaitAioLIFX:
         self.message = message
         self.event.set()
 
-    @asyncio.coroutine
-    def wait(self, method):
+    async def wait(self, method):
         """Call an aiolifx method and wait for its response or a timeout."""
         self.event.clear()
         method(callb=self.callback)
-        yield from self.event.wait()
+        await self.event.wait()
         return self.message
 
 
@@ -70,53 +69,46 @@ class Conductor:
         else:
             return None
 
-    @asyncio.coroutine
-    def start(self, effect, participants):
+    async def start(self, effect, participants):
         if not participants:
             return
 
-        yield from self.lock.acquire()
+        async with self.lock:
+            effect.conductor = self
 
-        effect.conductor = self
+            # Restore previous state
+            await self._stop_nolock(participants)
 
-        # Restore previous state
-        yield from self._stop_nolock(participants)
+            # Remember the current state
+            tasks = []
+            for device in participants:
+                tasks.append(AwaitAioLIFX().wait(device.get_color))
+                if device.color_zones:
+                    for zone in range(0, len(device.color_zones), 8):
+                        tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
+            await asyncio.wait(tasks)
 
-        # Remember the current state
-        tasks = []
-        for device in participants:
-            tasks.append(AwaitAioLIFX().wait(device.get_color))
-            if device.color_zones:
-                for zone in range(0, len(device.color_zones), 8):
-                    tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
-        yield from asyncio.wait(tasks)
+            for device in participants:
+                pre_state = PreState(device)
+                self.running[device.mac_addr] = RunningEffect(effect, pre_state)
 
-        for device in participants:
-            pre_state = PreState(device)
-            self.running[device.mac_addr] = RunningEffect(effect, pre_state)
+            # Powered off zones report zero brightness. Get the real values.
+            await self._fixup_multizone(participants)
 
-        # Powered off zones report zero brightness. Get the real values.
-        yield from self._fixup_multizone(participants)
+            self.loop.create_task(effect.async_perform(participants))
 
-        self.loop.create_task(effect.async_perform(participants))
-        self.lock.release()
+    async def stop(self, devices):
+        async with self.lock:
+            await self._stop_nolock(devices)
 
-    @asyncio.coroutine
-    def stop(self, devices):
-        yield from self.lock.acquire()
-        yield from self._stop_nolock(devices)
-        self.lock.release()
-
-    @asyncio.coroutine
-    def _stop_nolock(self, devices):
+    async def _stop_nolock(self, devices):
         tasks = []
         for device in devices:
             tasks.append(self.loop.create_task(self._stop_one(device)))
         if tasks:
-            yield from asyncio.wait(tasks)
+            await asyncio.wait(tasks)
 
-    @asyncio.coroutine
-    def _stop_one(self, device):
+    async def _stop_one(self, device):
         running = self.running.get(device.mac_addr, None)
         if not running:
             return
@@ -129,7 +121,7 @@ class Conductor:
 
         if not running.pre_state.power:
             device.set_power(False)
-            yield from asyncio.sleep(0.3)
+            await asyncio.sleep(0.3)
 
         ack = AwaitAioLIFX().wait
 
@@ -137,16 +129,15 @@ class Conductor:
         if zones:
             for index, zone_hsbk in enumerate(zones):
                 apply = 1 if (index == len(zones)-1) else 0
-                yield from ack(partial(device.set_color_zones,
+                await ack(partial(device.set_color_zones,
                     index, index, zone_hsbk, apply=apply))
         else:
-            yield from ack(partial(device.set_color,
+            await ack(partial(device.set_color,
                 running.pre_state.color))
 
-        yield from asyncio.sleep(0.3)
+        await asyncio.sleep(0.3)
 
-    @asyncio.coroutine
-    def _fixup_multizone(self, participants):
+    async def _fixup_multizone(self, participants):
         """Temporarily turn on multizone lights to get the correct zone states."""
         fixup = []
         for device in participants:
@@ -156,23 +147,22 @@ class Conductor:
         if not fixup:
             return
 
-        @asyncio.coroutine
-        def powertoggle(state):
+        async def powertoggle(state):
             tasks = []
             for device in fixup:
                 tasks.append(AwaitAioLIFX().wait(partial(device.set_power, state)))
-            yield from asyncio.wait(tasks)
-            yield from asyncio.sleep(0.3)
+            await asyncio.wait(tasks)
+            await asyncio.sleep(0.3)
 
         # Power on
-        yield from powertoggle(True)
+        await powertoggle(True)
 
         # Get full hsbk
         tasks = []
         for device in fixup:
             for zone in range(0, len(device.color_zones), 8):
                 tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
-        yield from asyncio.wait(tasks)
+        await asyncio.wait(tasks)
 
         # Update pre_state colors
         for device in fixup:
@@ -180,7 +170,7 @@ class Conductor:
                 self.running[device.mac_addr].pre_state.color_zones[zone] = device.color_zones[zone]
 
         # Power off again
-        yield from powertoggle(False)
+        await powertoggle(False)
 
 
 class LIFXEffect:
@@ -192,8 +182,7 @@ class LIFXEffect:
         self.conductor = None
         self.participants = None
 
-    @asyncio.coroutine
-    def async_perform(self, participants):
+    async def async_perform(self, participants):
         """Do common setup and play the effect."""
         self.participants = participants
 
@@ -203,24 +192,21 @@ class LIFXEffect:
             if self.power_on and not device.power_level:
                 tasks.append(self.conductor.loop.create_task(self.poweron(device)))
         if tasks:
-            yield from asyncio.wait(tasks)
+            await asyncio.wait(tasks)
 
-        yield from self.async_play()
+        await self.async_play()
 
-    @asyncio.coroutine
-    def poweron(self, device):
-        hsbk = yield from self.from_poweroff_hsbk(device)
+    async def poweron(self, device):
+        hsbk = await self.from_poweroff_hsbk(device)
         device.set_color(hsbk)
         device.set_power(True)
-        yield from asyncio.sleep(0.1)
+        await asyncio.sleep(0.1)
 
-    @asyncio.coroutine
-    def async_play(self):
+    async def async_play(self):
         """Play the effect."""
         yield None
 
-    @asyncio.coroutine
-    def from_poweroff_hsbk(self, device):
+    async def from_poweroff_hsbk(self, device):
         """Return the color when starting from a powered off state."""
         return [random.randint(0, 65535), 65535, 0, NEUTRAL_WHITE]
 
@@ -265,27 +251,25 @@ class EffectPulse(LIFXEffect):
         else:
             self.skew_ratio = 0
 
-    @asyncio.coroutine
-    def async_play(self):
+    async def async_play(self):
         """Play the effect on all lights."""
         for device in self.participants:
             self.conductor.loop.create_task(self.async_light_play(device))
 
         # Wait for completion and restore the initial state on remaining participants
-        yield from asyncio.sleep(self.period*self.cycles)
-        yield from self.conductor.stop(self.participants)
+        await asyncio.sleep(self.period*self.cycles)
+        await self.conductor.stop(self.participants)
 
-    @asyncio.coroutine
-    def async_light_play(self, device):
+    async def async_light_play(self, device):
         """Play a light effect on the bulb."""
 
         # Strobe must flash from a dark color
         if self.mode == 'strobe':
             device.set_color([0, 0, 0, NEUTRAL_WHITE])
-            yield from asyncio.sleep(0.1)
+            await asyncio.sleep(0.1)
 
         # Now run the effect
-        color = yield from self.effect_color(device)
+        color = await self.effect_color(device)
         args = {
             'transient': 1,
             'color': color,
@@ -297,14 +281,12 @@ class EffectPulse(LIFXEffect):
         }
         device.set_waveform(args)
 
-    @asyncio.coroutine
-    def from_poweroff_hsbk(self, device):
+    async def from_poweroff_hsbk(self, device):
         """Start with the target color, but no brightness."""
-        to_hsbk = yield from self.effect_color(device)
+        to_hsbk = await self.effect_color(device)
         return [to_hsbk[0], to_hsbk[1], 0, to_hsbk[2]]
 
-    @asyncio.coroutine
-    def effect_color(self, device):
+    async def effect_color(self, device):
         pre_state = self.running(device).pre_state
         base = list(pre_state.color)
 
@@ -340,8 +322,7 @@ class EffectColorloop(LIFXEffect):
         self.brightness = brightness
         self.transition = transition
 
-    @asyncio.coroutine
-    def async_play(self, **kwargs):
+    async def async_play(self, **kwargs):
         """Play the effect on all lights."""
         # Random start
         hue = random.uniform(0, 360) % 360
@@ -376,4 +357,4 @@ class EffectColorloop(LIFXEffect):
                 if len(self.participants) > 1:
                     lhue = (lhue + self.spread/(len(self.participants)-1)) % 360
 
-            yield from asyncio.sleep(self.period)
+            await asyncio.sleep(self.period)
