@@ -204,7 +204,7 @@ class LIFXEffect:
 
     async def async_play(self):
         """Play the effect."""
-        yield None
+        return None
 
     async def from_poweroff_hsbk(self, device):
         """Return the color when starting from a powered off state."""
