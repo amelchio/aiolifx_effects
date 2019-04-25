@@ -77,19 +77,22 @@ class Conductor:
             effect.conductor = self
 
             # Restore previous state
-            await self._stop_nolock(participants)
+            await self._stop_nolock(participants, effect)
 
             # Remember the current state
             tasks = []
             for device in participants:
-                tasks.append(AwaitAioLIFX().wait(device.get_color))
-                if device.color_zones:
-                    for zone in range(0, len(device.color_zones), 8):
-                        tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
-            await asyncio.wait(tasks)
+                if not self.running.get(device.mac_addr):
+                    tasks.append(AwaitAioLIFX().wait(device.get_color))
+                    if device.color_zones:
+                        for zone in range(0, len(device.color_zones), 8):
+                            tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
+            if tasks:
+                await asyncio.wait(tasks)
 
             for device in participants:
-                pre_state = PreState(device)
+                running = self.running.get(device.mac_addr)
+                pre_state = running.pre_state if running else PreState(device)
                 self.running[device.mac_addr] = RunningEffect(effect, pre_state)
 
             # Powered off zones report zero brightness. Get the real values.
@@ -101,23 +104,26 @@ class Conductor:
         async with self.lock:
             await self._stop_nolock(devices)
 
-    async def _stop_nolock(self, devices):
+    async def _stop_nolock(self, devices, new_effect=None):
         tasks = []
         for device in devices:
-            tasks.append(self.loop.create_task(self._stop_one(device)))
+            tasks.append(self.loop.create_task(self._stop_one(device, new_effect)))
         if tasks:
             await asyncio.wait(tasks)
 
-    async def _stop_one(self, device):
-        running = self.running.get(device.mac_addr, None)
+    async def _stop_one(self, device, new_effect):
+        running = self.running.get(device.mac_addr)
         if not running:
             return
         effect = running.effect
 
-        del self.running[device.mac_addr]
-
         index = next(i for i,p in enumerate(effect.participants) if p.mac_addr == device.mac_addr)
         effect.participants.pop(index)
+
+        if new_effect and effect.inherit_prestate(new_effect):
+            return
+
+        del self.running[device.mac_addr]
 
         if not running.pre_state.power:
             device.set_power(False)
@@ -212,6 +218,10 @@ class LIFXEffect:
 
     def running(self, device):
         return self.conductor.running[device.mac_addr]
+
+    def inherit_prestate(self, other):
+        """Returns True if two effects can run without a reset."""
+        return False
 
 
 class EffectPulse(LIFXEffect):
@@ -321,6 +331,10 @@ class EffectColorloop(LIFXEffect):
         self.spread = spread if spread else 30
         self.brightness = brightness
         self.transition = transition
+
+    def inherit_prestate(self, other):
+        """Returns True if two effects can run without a reset."""
+        return type(self) == type(other)
 
     async def async_play(self, **kwargs):
         """Play the effect on all lights."""
