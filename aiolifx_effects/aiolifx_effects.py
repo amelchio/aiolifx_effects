@@ -1,5 +1,6 @@
 import asyncio
 import random
+import logging
 from aiolifx.aiolifx import features_map
 
 from functools import partial
@@ -9,6 +10,8 @@ WAVEFORM_SINE = 1
 WAVEFORM_PULSE = 4
 
 NEUTRAL_WHITE = 3500
+
+_LOGGER = logging.getLogger(__name__)
 
 def lifx_white(device):
     """Return true if the device supports neither color or variable temperature and is not a switch."""
@@ -84,6 +87,7 @@ class Conductor:
 
         async with self.lock:
             effect.conductor = self
+            _LOGGER.debug(f"Starting {effect} on {', '.join(device.label for device in participants)}")
 
             # Restore previous state
             await self._stop_nolock(participants, effect)
@@ -92,11 +96,14 @@ class Conductor:
             tasks = []
             for device in participants:
                 if not self.running.get(device.mac_addr):
+                    _LOGGER.debug(f"Storing current light state for {device.label}")
                     tasks.append(AwaitAioLIFX().wait(device.get_color))
                     if device.color_zones:
                         if extended_multizone(device):
+                            _LOGGER.debug(f"Storing current zone state for {device.label} using get_extended_color_zones")
                             tasks.append(AwaitAioLIFX().wait(device.get_extended_color_zones))
                         else:
+                            _LOGGER.debug(f"Storing current zone state for {device.label} using get_color_zones")
                             for zone in range(0, len(device.color_zones), 8):
                                 tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
             if tasks:
@@ -209,6 +216,7 @@ class LIFXEffect:
         tasks = []
         for device in self.participants:
             if self.power_on and not device.power_level:
+                _LOGGER.debug(f"Powering on {device.label} before starting effect.")
                 tasks.append(self.conductor.loop.create_task(self.poweron(device)))
         if tasks:
             await asyncio.wait(tasks)
@@ -334,7 +342,7 @@ class EffectPulse(LIFXEffect):
 class EffectColorloop(LIFXEffect):
     """Representation of a colorloop effect."""
 
-    def __init__(self, power_on=True, period=None, change=None, spread=None, brightness=None, transition=None):
+    def __init__(self, power_on=True, period=None, change=None, spread=None, brightness=None, saturation=None, transition=None):
         """Initialize the colorloop effect."""
         super().__init__(power_on)
         self.name = 'colorloop'
@@ -343,6 +351,7 @@ class EffectColorloop(LIFXEffect):
         self.change = change if change else 20
         self.spread = spread if spread else 30
         self.brightness = brightness
+        self.saturation = saturation
         self.transition = transition
 
     def inherit_prestate(self, other):
@@ -358,10 +367,11 @@ class EffectColorloop(LIFXEffect):
         while self.participants:
             hue = (hue + direction*self.change) % 360
             lhue = hue
-
+            _LOGGER.debug(f"Starting color loop on {', '.join(device.label for device in self.participants)}")
             random.shuffle(self.participants)
 
             for device in self.participants:
+
                 if self.transition is not None:
                     transition = int(1000*self.transition)
                 elif device == self.participants[0] or self.spread > 0:
@@ -372,13 +382,19 @@ class EffectColorloop(LIFXEffect):
                 else:
                     brightness = self.running(device).pre_state.color[2]
 
+                if self.saturation is not None:
+                    saturation = self.saturation
+                else:
+                    saturation = int(random.uniform(0.8, 1.0)*65535)
+
                 hsbk = [
                     int(65535/360*lhue),
-                    int(random.uniform(0.8, 1.0)*65535),
+                    saturation,
                     brightness,
                     NEUTRAL_WHITE,
                 ]
                 device.set_color(hsbk, None, transition)
+                _LOGGER.debug(f"Send set_color({int(65535/360*lhue)}, {saturation}, {brightness}, {NEUTRAL_WHITE}, transition={transition}) to {device.label}")
 
                 # Adjust the next light so the full spread is used
                 if len(self.participants) > 1:
