@@ -10,16 +10,19 @@ WAVEFORM_PULSE = 4
 
 NEUTRAL_WHITE = 3500
 
+
 def lifx_white(device):
-    """Return true if the device supports neither color or variable temperature and is not a switch."""
+    """Return true if the device supports neither color nor temperature range."""
     return bool(
         features_map[device.product]["color"] is False
         and features_map[device.product]["temperature_range"] is None
     )
 
-def extended_multizone(device):
-    """Return try if the device supports extended multizone messages."""
+
+def has_extended_multizone(device):
+    """Return true if the device supports extended multizone messages."""
     return features_map[device.product]["extended_multizone"]
+
 
 class PreState:
     """Structure describing a power/color state."""
@@ -94,7 +97,7 @@ class Conductor:
                 if not self.running.get(device.mac_addr):
                     tasks.append(AwaitAioLIFX().wait(device.get_color))
                     if device.color_zones:
-                        if extended_multizone(device):
+                        if has_extended_multizone(device):
                             tasks.append(AwaitAioLIFX().wait(device.get_extended_color_zones))
                         else:
                             for zone in range(0, len(device.color_zones), 8):
@@ -108,7 +111,7 @@ class Conductor:
                 self.running[device.mac_addr] = RunningEffect(effect, pre_state)
 
             # Powered off zones report zero brightness on older multizone devices. Get the real values.
-            if extended_multizone(device) is False:
+            if has_extended_multizone(device) is False:
                 await self._fixup_multizone(participants)
 
             self.loop.create_task(effect.async_perform(participants))
@@ -334,7 +337,7 @@ class EffectPulse(LIFXEffect):
 class EffectColorloop(LIFXEffect):
     """Representation of a colorloop effect."""
 
-    def __init__(self, power_on=True, period=None, change=None, spread=None, brightness=None, transition=None):
+    def __init__(self, power_on=True, period=None, change=None, spread=None, brightness=None, saturation_min=None, saturation_max=None, transition=None):
         """Initialize the colorloop effect."""
         super().__init__(power_on)
         self.name = 'colorloop'
@@ -343,6 +346,7 @@ class EffectColorloop(LIFXEffect):
         self.change = change if change else 20
         self.spread = spread if spread else 30
         self.brightness = brightness
+        self.saturation = [saturation_min or 52428, saturation_max or 65535]
         self.transition = transition
 
     def inherit_prestate(self, other):
@@ -358,7 +362,6 @@ class EffectColorloop(LIFXEffect):
         while self.participants:
             hue = (hue + direction*self.change) % 360
             lhue = hue
-
             random.shuffle(self.participants)
 
             for device in self.participants:
@@ -372,9 +375,11 @@ class EffectColorloop(LIFXEffect):
                 else:
                     brightness = self.running(device).pre_state.color[2]
 
+                saturation = int(random.uniform(self.saturation[0], self.saturation[1]))
+
                 hsbk = [
                     int(65535/360*lhue),
-                    int(random.uniform(0.8, 1.0)*65535),
+                    saturation,
                     brightness,
                     NEUTRAL_WHITE,
                 ]
