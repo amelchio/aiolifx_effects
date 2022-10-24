@@ -1,5 +1,6 @@
 import asyncio
 import random
+from aiolifx.aiolifx import features_map
 
 from functools import partial
 
@@ -10,7 +11,15 @@ WAVEFORM_PULSE = 4
 NEUTRAL_WHITE = 3500
 
 def lifx_white(device):
-    return device.product and device.product in [10, 11, 18]
+    """Return true if the device supports neither color or variable temperature and is not a switch."""
+    return bool(
+        features_map[device.product]["color"] is False
+        and features_map[device.product]["temperature_range"] is None
+    )
+
+def extended_multizone(device):
+    """Return try if the device supports extended multizone messages."""
+    return features_map[device.product]["extended_multizone"]
 
 class PreState:
     """Structure describing a power/color state."""
@@ -85,8 +94,11 @@ class Conductor:
                 if not self.running.get(device.mac_addr):
                     tasks.append(AwaitAioLIFX().wait(device.get_color))
                     if device.color_zones:
-                        for zone in range(0, len(device.color_zones), 8):
-                            tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
+                        if extended_multizone(device):
+                            tasks.append(AwaitAioLIFX().wait(device.get_extended_color_zones))
+                        else:
+                            for zone in range(0, len(device.color_zones), 8):
+                                tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
             if tasks:
                 await asyncio.wait(tasks)
 
@@ -95,8 +107,9 @@ class Conductor:
                 pre_state = running.pre_state if running else PreState(device)
                 self.running[device.mac_addr] = RunningEffect(effect, pre_state)
 
-            # Powered off zones report zero brightness. Get the real values.
-            await self._fixup_multizone(participants)
+            # Powered off zones report zero brightness on older multizone devices. Get the real values.
+            if extended_multizone(device) is False:
+                await self._fixup_multizone(participants)
 
             self.loop.create_task(effect.async_perform(participants))
 
