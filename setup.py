@@ -5,8 +5,8 @@ from setuptools import setup
 setup(
     name='aiolifx_effects',
     packages=['aiolifx_effects'],
-    version='0.2.2',
-    install_requires=['aiolifx>=0.5.0'],
+    version='0.3.0',
+    install_requires=['aiolifx>=0.8.6'],
     description='aiolifx light effects',
     author='Anders Melchiorsen',
     author_email='amelchio@nogoto.net',
