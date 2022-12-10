@@ -29,12 +29,12 @@ discover = loop.create_datagram_endpoint(
 loop.create_task(discover)
 
 # Probe
-sleep = loop.create_task(asyncio.sleep(1))
+sleep = loop.create_task(asyncio.sleep(3))
 loop.run_until_complete(sleep)
 
 # Run effect
 devices = list(mybulbs.bulbs.values())
-effect = aiolifx_effects.EffectColorloop(period=1)
+effect = aiolifx_effects.EffectPulse(power_on=True, mode="blink", cycles=3)
 loop.create_task(conductor.start(effect, devices))
 
 # Stop effect in a while
