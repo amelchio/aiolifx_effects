@@ -1,8 +1,9 @@
 import asyncio
+from functools import partial
 import random
+
 from aiolifx.aiolifx import features_map
 
-from functools import partial
 
 # aiolifx waveform modes
 WAVEFORM_SINE = 1
@@ -13,10 +14,11 @@ NEUTRAL_WHITE = 3500
 
 def lifx_white(device):
     """Return true if the device supports neither color nor temperature range."""
-    return bool(
-        features_map[device.product]["color"] is False
-        and features_map[device.product]["temperature_range"] is None
-    )
+    max_kelvin = features_map[device.product].get("max_kelvin", None)
+    min_kelvin = features_map[device.product].get("min_kelvin", None)
+
+    if max_kelvin is not None and min_kelvin is not None:
+        return bool(max_kelvin == min_kelvin)
 
 
 def has_extended_multizone(device):
@@ -94,6 +96,9 @@ class Conductor:
             # Remember the current state
             tasks = []
             for device in participants:
+                if device.version is None:
+                    response = await AwaitAioLIFX().wait(device.get_version)
+                    device.product = response.product
                 if not self.running.get(device.mac_addr):
                     tasks.append(AwaitAioLIFX().wait(device.get_color))
                     if device.color_zones:
