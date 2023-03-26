@@ -100,13 +100,13 @@ class Conductor:
                     response = await AwaitAioLIFX().wait(device.get_version)
                     device.product = response.product
                 if not self.running.get(device.mac_addr):
-                    tasks.append(AwaitAioLIFX().wait(device.get_color))
+                    tasks.append(asyncio.create_task(AwaitAioLIFX().wait(device.get_color)))
                     if device.color_zones:
                         if has_extended_multizone(device):
-                            tasks.append(AwaitAioLIFX().wait(device.get_extended_color_zones))
+                            tasks.append(asyncio.create_task(AwaitAioLIFX().wait(device.get_extended_color_zones)))
                         else:
                             for zone in range(0, len(device.color_zones), 8):
-                                tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
+                                tasks.append(asyncio.create_task(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone))))
             if tasks:
                 await asyncio.wait(tasks)
 
@@ -177,7 +177,7 @@ class Conductor:
         async def powertoggle(state):
             tasks = []
             for device in fixup:
-                tasks.append(AwaitAioLIFX().wait(partial(device.set_power, state)))
+                tasks.append(asyncio.create_task(AwaitAioLIFX().wait(partial(device.set_power, state))))
             await asyncio.wait(tasks)
             await asyncio.sleep(0.3)
 
@@ -188,7 +188,7 @@ class Conductor:
         tasks = []
         for device in fixup:
             for zone in range(0, len(device.color_zones), 8):
-                tasks.append(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone)))
+                tasks.append(asyncio.create_task(AwaitAioLIFX().wait(partial(device.get_color_zones, start_index=zone))))
         await asyncio.wait(tasks)
 
         # Update pre_state colors
